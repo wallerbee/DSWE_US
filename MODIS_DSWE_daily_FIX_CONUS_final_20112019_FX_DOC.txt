@@ -1,0 +1,796 @@
+////////////////////////////////////////////////////////////////////////////
+//
+// "MODIS_DSWE_daily_FIX_CONUS_final_20112019_FX_DOC.js"
+// Eric Waller; 06-13-20 
+//
+////////////////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// This script creates our FINAL daily MODIS DSWE for the U.S. (Lower 48) for 2011-19
+// and exports to a single asset with each date as a band. 
+//
+// We encountered memory limits in Google Earth Engine when the full 17 (2003-2019) year record was attempted. 
+// But "start_year" and "end_year" immediately below could be modified if a different subset of dailies is desired.
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// USER INPUT: {If these are changed, should ensure that the export to Asset has the corresponding years indicated}
+var start_year = ee.Number(2003); // Input start year here
+var end_year = ee.Number(2010); // Input end year (inclusive) here
+
+/////////////////////////////////////////////////////////////////////////
+// Don't change anything from here on (other than possibly the Export name at end, but that naming can also occur in the pop-up export GUI):
+/////////////////////////////////////////////////////////////////////////
+
+var Lower48 = ee.FeatureCollection("users/ericwaller/US_Lower_48");
+var CAbuff = ee.FeatureCollection("users/ericwaller/CAbuff"),
+    hill_250sin = ee.Image("users/ericwaller/hillshd_250sin_JF_US"), // This is for Jan/Feb
+    slope = ee.Image("users/ericwaller/slope_250sin_US"),
+    hillshd_MA = ee.Image("users/ericwaller/hillshd_250sin_MA_US"),
+    hillshd_MJ = ee.Image("users/ericwaller/hillshd_250sin_MJ_US");
+// var dem = ee.Image("USGS/NED").clip(Lower48);
+// var demscale = dem.projection().nominalScale();
+var region = Lower48;
+
+
+//
+var yearseq = ee.List.sequence(start_year,end_year,1);
+var startdate = ee.Date(ee.String(start_year).cat('-01-01'));
+var enddate = ee.Date(ee.String(end_year.add(1)).cat('-01-01'));
+// 
+
+// USE 250 Meter image to get projection info for reprojecting DEM, and for export projection
+var MOD_250 = ee.ImageCollection('MODIS/006/MOD09GQ')
+    .filterDate('2017-01-01','2017-01-02');
+var mf = MOD_250.first().select('sur_refl_b01');
+var mfproj = mf.projection();
+var mfscale = mf.projection().nominalScale();
+// var dem_sin = dem.reproject(mfproj,null,demscale);
+// var dem_250sin = dem_sin.reduceResolution({reducer:ee.Reducer.median(), maxPixels:10000})
+//                       .reproject(mfproj,null,mfscale);
+// Would need these for any export:
+var scaleSIN250 = mf.projection().nominalScale().getInfo();
+var crsSIN250 = mf.projection().crs().getInfo();
+
+
+// *************************
+// ANGULAR CORRECTION ASSETS (2017-19 for after 2010; Could develop more and add here):
+// *************************
+
+// Terra correction factors derived from 2017-2019 data (Currently applied to years 2011-2019)
+// bimval (bimonthly value) and corrval (correction value) added for later joining with appropriate dates of MODIS
+var ta250JF = ee.Image("users/ericwaller/t_absolute250_JF_1719_US");
+var ts250JF = ee.Image("users/ericwaller/t_signed250_JF_1719_US");
+var ta500JF = ee.Image("users/ericwaller/t_absolute500_JF_1719_US");
+var ts500JF = ee.Image("users/ericwaller/t_signed500_JF_1719_US");
+var taJF = ta500JF.addBands(ta250JF);
+var tsJF = ts500JF.addBands(ts250JF);
+var tasJF = taJF.addBands(tsJF.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 1).set('corrval', 30);
+
+var ta250MA = ee.Image("users/ericwaller/t_absolute250_MA_1719_US");
+var ts250MA = ee.Image("users/ericwaller/t_signed250_MA_1719_US");
+var ta500MA = ee.Image("users/ericwaller/t_absolute500_MA_1719_US");
+var ts500MA = ee.Image("users/ericwaller/t_signed500_MA_1719_US");
+var taMA = ta500MA.addBands(ta250MA);
+var tsMA = ts500MA.addBands(ts250MA);
+var tasMA = taMA.addBands(tsMA.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 2).set('corrval', 30);
+
+var ta250MJ = ee.Image("users/ericwaller/t_absolute250_MJ_1719_US");
+var ts250MJ = ee.Image("users/ericwaller/t_signed250_MJ_1719_US");
+var ta500MJ = ee.Image("users/ericwaller/t_absolute500_MJ_1719_US");
+var ts500MJ = ee.Image("users/ericwaller/t_signed500_MJ_1719_US");
+var taMJ = ta500MJ.addBands(ta250MJ);
+var tsMJ = ts500MJ.addBands(ts250MJ);
+var tasMJ = taMJ.addBands(tsMJ.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 3).set('corrval', 30);
+
+var ta250JA = ee.Image("users/ericwaller/t_absolute250_JA_1719_US");
+var ts250JA = ee.Image("users/ericwaller/t_signed250_JA_1719_US");
+var ta500JA = ee.Image("users/ericwaller/t_absolute500_JA_1719_US");
+var ts500JA = ee.Image("users/ericwaller/t_signed500_JA_1719_US");
+var taJA = ta500JA.addBands(ta250JA);
+var tsJA = ts500JA.addBands(ts250JA);
+var tasJA = taJA.addBands(tsJA.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 4).set('corrval', 30);
+
+var ta250SO = ee.Image("users/ericwaller/t_absolute250_SO_1719_US");
+var ts250SO = ee.Image("users/ericwaller/t_signed250_SO_1719_US");
+var ta500SO = ee.Image("users/ericwaller/t_absolute500_SO_1719_US");
+var ts500SO = ee.Image("users/ericwaller/t_signed500_SO_1719_US");
+var taSO = ta500SO.addBands(ta250SO);
+var tsSO = ts500SO.addBands(ts250SO);
+var tasSO = taSO.addBands(tsSO.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 5).set('corrval', 30);
+
+var ta250ND = ee.Image("users/ericwaller/t_absolute250_ND_1719_US");
+var ts250ND = ee.Image("users/ericwaller/t_signed250_ND_1719_US");
+var ta500ND = ee.Image("users/ericwaller/t_absolute500_ND_1719_US");
+var ts500ND = ee.Image("users/ericwaller/t_signed500_ND_1719_US");
+var taND = ta500ND.addBands(ta250ND);
+var tsND = ts500ND.addBands(ts250ND);
+var tasND = taND.addBands(tsND.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 6).set('corrval', 30);
+
+
+// Aqua Correction Factors 2017-19 (for 2011-), 2 resolutions
+var aa250JF = ee.Image("users/ericwaller/a_absolute250_JF_1719_US");
+var as250JF = ee.Image("users/ericwaller/a_signed250_JF_1719_US");
+var aa500JF = ee.Image("users/ericwaller/a_absolute500_JF_1719_US");
+var as500JF = ee.Image("users/ericwaller/a_signed500_JF_1719_US");
+var aaJF = aa500JF.addBands(aa250JF);
+var asJF = as500JF.addBands(as250JF);
+var aasJF = aaJF.addBands(asJF.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 1).set('corrval', 30);
+
+var aa250MA = ee.Image("users/ericwaller/a_absolute250_MA_1719_US");
+var as250MA = ee.Image("users/ericwaller/a_signed250_MA_1719_US");
+var aa500MA = ee.Image("users/ericwaller/a_absolute500_MA_1719_US");
+var as500MA = ee.Image("users/ericwaller/a_signed500_MA_1719_US");
+var aaMA = aa500MA.addBands(aa250MA);
+var asMA = as500MA.addBands(as250MA);
+var aasMA = aaMA.addBands(asMA.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 2).set('corrval', 30);
+
+var aa250MJ = ee.Image("users/ericwaller/a_absolute250_MJ_1719_US");
+var as250MJ = ee.Image("users/ericwaller/a_signed250_MJ_1719_US");
+var aa500MJ = ee.Image("users/ericwaller/a_absolute500_MJ_1719_US");
+var as500MJ = ee.Image("users/ericwaller/a_signed500_MJ_1719_US");
+var aaMJ = aa500MJ.addBands(aa250MJ);
+var asMJ = as500MJ.addBands(as250MJ);
+var aasMJ = aaMJ.addBands(asMJ.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 3).set('corrval', 30);
+
+var aa250JA = ee.Image("users/ericwaller/a_absolute250_JA_1719_US");
+var as250JA = ee.Image("users/ericwaller/a_signed250_JA_1719_US");
+var aa500JA = ee.Image("users/ericwaller/a_absolute500_JA_1719_US");
+var as500JA = ee.Image("users/ericwaller/a_signed500_JA_1719_US");
+var aaJA = aa500JA.addBands(aa250JA);
+var asJA = as500JA.addBands(as250JA);
+var aasJA = aaJA.addBands(asJA.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 4).set('corrval', 30);
+
+var aa250SO = ee.Image("users/ericwaller/a_absolute250_SO_1719_US");
+var as250SO = ee.Image("users/ericwaller/a_signed250_SO_1719_US");
+var aa500SO = ee.Image("users/ericwaller/a_absolute500_SO_1719_US");
+var as500SO = ee.Image("users/ericwaller/a_signed500_SO_1719_US");
+var aaSO = aa500SO.addBands(aa250SO);
+var asSO = as500SO.addBands(as250SO);
+var aasSO = aaSO.addBands(asSO.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 5).set('corrval', 30);
+
+var aa250ND = ee.Image("users/ericwaller/a_absolute250_ND_1719_US");
+var as250ND = ee.Image("users/ericwaller/a_signed250_ND_1719_US");
+var aa500ND = ee.Image("users/ericwaller/a_absolute500_ND_1719_US");
+var as500ND = ee.Image("users/ericwaller/a_signed500_ND_1719_US");
+var aaND = aa500ND.addBands(aa250ND);
+var asND = as500ND.addBands(as250ND);
+var aasND = aaND.addBands(asND.rename(['ts1','ts2','ts3','ts4','ts5','ts6','ts7','ts1_1','ts2_1'])).set('bimval', 6).set('corrval', 30);
+
+
+// Create Collections of bi-monthly correction groups (bimval)
+var tasCORRS = ee.ImageCollection.fromImages([tasJF,tasMA,tasMJ,tasJA,tasSO,tasND]); //,tasJF_0305,tasMA_0305,tasMJ_0305,tasJA_0305,tasSO_0305,tasND_0305]);
+var aasCORRS = ee.ImageCollection.fromImages([aasJF,aasMA,aasMJ,aasJA,aasSO,aasND]); //,aasJF_0305,aasMA_0305,aasMJ_0305,aasJA_0305,aasSO_0305,aasND_0305]);
+
+// FUNCTION TO ADD A UNIQUE COMBVAL TO EACH IMAGE
+var add_combval = function(img){
+                img = img.set('combval', ee.Number(img.get('bimval')).add(img.get('corrval')));
+                return img;
+};
+
+var tasCORRS = tasCORRS.map(add_combval);
+var aasCORRS = aasCORRS.map(add_combval);
+
+// Collections of Hillshades
+var hill1 = hill_250sin.set('bimval', 1);
+var hill2 = hillshd_MA.set('bimval', 2);
+var hill3 = hillshd_MJ.set('bimval', 3);
+var hill4 = hillshd_MJ.set('bimval', 4); // Just mirroring from here on since zenith's similar
+var hill5 = hillshd_MA.set('bimval', 5);
+var hill6 = hill_250sin.set('bimval', 6);
+
+var hillcoll = ee.ImageCollection.fromImages([hill1, hill2, hill3, hill4, hill5, hill6]); // note the mirroring of 3 originals
+
+
+////////////////////////////////////////////////////////////////////
+// MODIS REFLECTANCE DATA
+////////////////////////////////////////////////////////////////////
+// MODIS Raw Data Collections (500 meters and 250 meters)
+
+var MOD_500 = ee.ImageCollection('MODIS/006/MOD09GA')
+    .filterDate(startdate,enddate) //
+    .filter(ee.Filter.calendarRange(1, 12, 'month'));
+
+var MOD_250 = ee.ImageCollection('MODIS/006/MOD09GQ')
+    .filterDate(startdate,enddate) //
+    .filter(ee.Filter.calendarRange(1, 12, 'month'));
+
+// Aqua data
+var MYD_500 = ee.ImageCollection('MODIS/006/MYD09GA')
+    .filterDate(startdate,enddate) //
+    .filter(ee.Filter.calendarRange(1, 12, 'month'));
+
+var MYD_250 = ee.ImageCollection('MODIS/006/MYD09GQ')
+    .filterDate(startdate,enddate) //
+    .filter(ee.Filter.calendarRange(1, 12, 'month'));
+
+// NEW: DISPLAY FIRST OF EACH, AND DIFFERENCE:
+var tf = MOD_500.first();
+var af = MYD_500.first();
+var aftf = af.subtract(tf);
+Map.addLayer(tf.select(['sur_refl_b06','sur_refl_b02','sur_refl_b04']), {min:0, max:3000}, 'tf');
+Map.addLayer(af.select(['sur_refl_b07','sur_refl_b02','sur_refl_b01']), {min:0, max:3000}, 'af');
+Map.addLayer(aftf.select(['sur_refl_b07','sur_refl_b02','sur_refl_b01']), {min:-2000, max:2000}, 'aftf');
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// FN TO REPLACE WEIRD B7 MASKED DATA WITH VALUES OF 0 (Need to keep in mind)
+var B7repl = function(image){
+  var repl = image.select('sur_refl_b07').unmask(ee.Image(0));
+  return image.addBands({srcImg:repl, overwrite:true});
+};
+MOD_500 = MOD_500.map(B7repl);
+////////////////////////////////////////////////////////////////////////////////////////////////
+// Need similar overwrite function to replace all the negative values with zeroes
+// CLAMP 500 meter data 
+var negclamp500 = function(image){
+  var repl1 = image.select('sur_refl_b01').clamp(0,10000);
+  var repl2 = image.select('sur_refl_b02').clamp(0,10000);
+  var repl3 = image.select('sur_refl_b03').clamp(0,10000);
+  var repl4 = image.select('sur_refl_b04').clamp(0,10000);
+  var repl6 = image.select('sur_refl_b06').clamp(0,10000);
+  var repl7 = image.select('sur_refl_b07').clamp(0,10000);
+  image = image.addBands({srcImg:repl1, overwrite:true});
+  image = image.addBands({srcImg:repl2, overwrite:true});
+  image = image.addBands({srcImg:repl3, overwrite:true});
+  image = image.addBands({srcImg:repl4, overwrite:true});
+  image = image.addBands({srcImg:repl6, overwrite:true});
+  return image.addBands({srcImg:repl7, overwrite:true});
+};
+MOD_500 = MOD_500.map(negclamp500);
+MYD_500 = MYD_500.map(negclamp500);
+
+// CLAMP 250 meter data 
+var negclamp250 = function(image){
+  var repl1 = image.select('sur_refl_b01').clamp(0,10000);
+  var repl2 = image.select('sur_refl_b02').clamp(0,10000);
+  image = image.addBands({srcImg:repl1, overwrite:true});
+  return image.addBands({srcImg:repl2, overwrite:true});
+  //return image.select().addBands([repl1,repl2]);
+};
+MOD_250 = MOD_250.map(negclamp250);
+MYD_250 = MYD_250.map(negclamp250);
+
+
+//////////////////////////////////////////////////////////////////////////////////
+function joinCollections(coll1,coll2){
+      var MergeBands = function(element) {
+        return ee.Image.cat(element.get('primary'), element.get('secondary'));
+      };
+      var join = ee.Join.inner();
+      var filter = ee.Filter.equals('system:time_start',null, 'system:time_start');
+      var joined = ee.ImageCollection(join.apply(coll1, coll2, filter));
+      joined = ee.ImageCollection(joined.map(MergeBands));
+      return joined;
+    }  
+  
+//var MOD_joined = joinCollections(MOD_500,MOD_250); 
+//var MYD_joined = joinCollections(MYD_500,MYD_250);
+
+// //  FOR SOME REASON, HAD AN ISSUE WITH THE JOIN HERE, SO:
+
+var MOD09 = MOD_500.combine(MOD_250);
+var MYD09 = MYD_500.combine(MYD_250);
+
+// CLIP
+var modclip = function(image){
+  var imageclip = image.clip(Lower48);
+  return imageclip;
+};
+
+var MOD_joined = MOD09.map(modclip);
+var MYD_joined = MYD09.map(modclip);
+
+
+//
+// // A function to mask out pixels that do not have observations.
+// THIS WAS APPROPRIATE FOR OTHER ANALYSES (e.g., angular correction)
+// BUT CAUSED PROBLEMS: UNMASKING TO ZERO HELPED
+// UPDATEMASK PORTION LEFT OVER FROM ORIG, BUT SEEMS FINE TO KEEP IN
+var unmaskEmptyPixels = function(image) {
+  // Find pixels that had observations, i.e. number of observations 
+  // is strictly greater than 0.
+  var withObs = image.select('num_observations_1km').gt(0);
+  image = image.updateMask(withObs);
+  return image.unmask();
+};
+
+MOD_joined = MOD_joined.map(unmaskEmptyPixels);
+MYD_joined = MYD_joined.map(unmaskEmptyPixels);
+
+
+////////////////////////////////////////////////////////////////////
+//
+// Use the "getRelative" date here to match image date with appropriate hillshade and angular correction
+// if doy = 0-58, use JF; if day = 59-119, use MA, etc.
+
+var addBimVal = function(image) {
+    var year = ee.Date(image.get('system:time_start')).get('year');
+    var doy = ee.Date(image.get('system:time_start')).
+          getRelative('day','year');
+    var dom = ee.Date(image.get('system:time_start')).
+          getRelative('day','month');
+    image = image.set('dayofmonth', dom.add(1)); // NOTE THE ADDITION OF 1 TO START FROM 1
+    //image = image.set('propnew', doy)
+    //var proptest = ee.Algorithms.If(ee.Number(image.get('propnew')).lt(310),4,2)
+    var bimval = ee.Algorithms.If(doy.lt(304),5,6);
+    bimval = ee.Algorithms.If(doy.lt(243),4,bimval);
+    bimval = ee.Algorithms.If(doy.lt(181),3,bimval);
+    bimval = ee.Algorithms.If(doy.lt(120),2,bimval);
+    bimval = ee.Algorithms.If(doy.lt(59),1,bimval);
+    var corrval = ee.Algorithms.If(year.lt(2011),10,30);
+    image = image.set('bimval', bimval);
+    image = image.set('combval', ee.Number(bimval).add(corrval));
+    return image;
+};
+
+var MOD_jbv = MOD_joined.map(addBimVal);
+var MYD_jbv = MYD_joined.map(addBimVal);
+
+
+// Noel's function for help with cloud masking
+var getQABits = function(image, start, end, newName) {
+    var pattern = 0;
+    for (var i = start; i <= end; i++) {
+       pattern += 1 << i;
+    }
+    // Return a single band image of the extracted QA bits, giving the band a new name.
+    return image.select([0], [newName])
+                  .bitwiseAnd(pattern)
+                  .rightShift(start);
+};
+
+// CLOUD, SHADOW, and SNOW I.D.
+var keepClouds = function(image) {
+  var cirrus = getQABits(image.select('state_1km'), 8, 9, 'cirrus')
+  var clouds = getQABits(image.select('state_1km'),0,1,'clouds')
+  var shadow = getQABits(image.select('state_1km'),2,2,'shadow')
+  var snow = getQABits(image.select('state_1km'),12,12,'snow')
+  var intcld = getQABits(image.select('state_1km'),10,10,'intcld') // internal cloud algorithm flag
+  var adjcld = getQABits(image.select('state_1km'),13,13,'adjcld') // Pixel adjacent to a cld
+  //var noncloudy = intcld.eq(0).and(adjcld.eq(0)).and(shadow.eq(0)).and(snow.eq(0));
+  var cloudy1 = intcld.neq(0).or(adjcld.neq(0)).or(shadow.neq(0)).or(snow.neq(0));
+  var cloudy2 = clouds.neq(0).or(cirrus.neq(0)).or(shadow.neq(0)).or(snow.neq(0));  
+  var cloudy = cloudy1.and(cloudy2); 
+  return image.addBands(cloudy.rename('clouds'));
+};
+
+var MOD_jbv2 = MOD_jbv.map(keepClouds);
+var MYD_jbv2 = MYD_jbv//.map(keepClouds); // Didn't need Aqua cloud i.d.
+
+////////////////
+
+// FUNCTION TO ADD SIGNED VERSION OF VIEW ANGLE
+
+var signangle = function(img){
+  var azimuth = img.select('SensorAzimuth');
+  var zenith = img.select('SensorZenith');
+  var aziabs = azimuth.abs();
+  var azisign = azimuth.divide(aziabs);
+  var zensign = zenith.multiply(azisign).multiply(-1); // -1: want west-looking to be negative
+  zensign = zensign.rename('zensign');
+  return img.addBands(zensign);
+}
+
+var MOD_signzen2 = MOD_jbv2.map(signangle);
+var MYD_signzen2 = MYD_jbv2.map(signangle);
+
+
+// NEED TO APPLY CORRECTIONS;  HERE IS WHERE I NEED CORRECTION FACTORS JOINED
+// FN has same join name as before, but filter is on shared "COMBVAL"
+function joinCollectionsCV(coll1,coll2){
+      var MergeBands = function(element) {
+        return ee.Image.cat(element.get('primary'), element.get('secondary'));
+      };
+      var join = ee.Join.inner();
+      //var filter = ee.Filter.equals('bimval', null, 'bimval');
+      var filter = ee.Filter.equals('combval', null, 'combval');
+      var joined = ee.ImageCollection(join.apply(coll1, coll2, filter));
+      joined = ee.ImageCollection(joined.map(MergeBands));
+      return joined;
+    }  
+  
+var MOD_cj2 = joinCollectionsCV(MOD_signzen2,tasCORRS); 
+var MYD_cj2 = joinCollectionsCV(MYD_signzen2,aasCORRS);
+
+// APPLY CORRECTIONS WITHIN JOINED PRODUCTS
+// Function to apply Linear Fit corrections to joined collections (with angle info from above)
+var appcorr = function(image){
+  var zensign = image.select('zensign');
+  var absdev = image.select('SensorZenith'); // 
+  var b1 = image.select('sur_refl_b01');
+  var b2 = image.select('sur_refl_b02');
+  var b3 = image.select('sur_refl_b03');
+  var b4 = image.select('sur_refl_b04');
+  var b5 = image.select('sur_refl_b05');
+  var b6 = image.select('sur_refl_b06');
+  var b7 = image.select('sur_refl_b07');
+  var b1_250 = image.select('sur_refl_b01_1');
+  var b2_250 = image.select('sur_refl_b02_1');
+  
+   // DONT APPLY ANGULAR CORRECTION TO DARK STUFF
+  var darknir = b2.lt(50);  // Some consideration that this rule should relate to being dark in two bands in case of noise?  But noisy going to suck, regardless!
+  // Also could consider a separate dark rule for nir at 500m to apply to the 500m's and one for nir at 250m to apply to the 250's
+  
+  // Seems like as good a place as any to deal with problematic SWIR bands (where SWIR's > NIR over dark water, etc.)
+  var darknir2 = b2.lt(150);
+  b6 = b6.where(darknir2.and(b6.gt(b2)), b2); // Capping SWIRs at NIR value over extremely dark surfaces
+  b7 = b7.where(darknir2.and(b7.gt(b2)), b2);
+  
+  var darknir3 = b2.lt(100);
+  b2_250 = b2_250.where(darknir3.and(b2_250.gt(b2)), b2); 
+  // Ideally the above might've factored into the original angular corrections for SWIR bands
+  // Barring that, any concerns about applying angular corrections to some of these low SWIR values that I'm modifying?
+  
+  var b1_signedcorr = zensign.multiply(image.select('ts1'));
+  var b1_abscorr = absdev.multiply(image.select('t1'));
+  var newb1 = b1.subtract(b1_signedcorr).subtract(b1_abscorr).clamp(0,10000).rename('newb1');
+  newb1 = newb1.where(darknir, b1);
+
+  var b2_signedcorr = zensign.multiply(image.select('ts2'));
+  var b2_abscorr = absdev.multiply(image.select('t2'));
+  var newb2 = b2.subtract(b2_signedcorr).subtract(b2_abscorr).clamp(0,10000).rename('newb2');
+    newb2 = newb2.where(darknir, b2);
+
+  var b3_signedcorr = zensign.multiply(image.select('ts3'));
+  var b3_abscorr = absdev.multiply(image.select('t3'));
+  var newb3 = b3.subtract(b3_signedcorr).subtract(b3_abscorr).clamp(0,10000).rename('newb3');
+  newb3 = newb3.where(darknir, b3);
+  
+  var b4_signedcorr = zensign.multiply(image.select('ts4'));
+  var b4_abscorr = absdev.multiply(image.select('t4'));
+  var newb4 = b4.subtract(b4_signedcorr).subtract(b4_abscorr).clamp(0,10000).rename('newb4');
+  newb4 = newb4.where(darknir, b4);
+  
+  var b5_signedcorr = zensign.multiply(image.select('ts5'));
+  var b5_abscorr = absdev.multiply(image.select('t5'));
+  var newb5 = b5.subtract(b5_signedcorr).subtract(b5_abscorr).clamp(0,10000).rename('newb5');
+  newb5 = newb5.where(darknir, b5);
+  
+  var b6_signedcorr = zensign.multiply(image.select('ts6'));
+  var b6_abscorr = absdev.multiply(image.select('t6'));
+  var newb6 = b6.subtract(b6_signedcorr).subtract(b6_abscorr).clamp(0,10000).rename('newb6');
+  newb6 = newb6.where(darknir, b6);
+  
+  var b7_signedcorr = zensign.multiply(image.select('ts7'));
+  var b7_abscorr = absdev.multiply(image.select('t7'));
+  var newb7 = b7.subtract(b7_signedcorr).subtract(b7_abscorr).clamp(0,10000).rename('newb7');
+  newb7 = newb7.where(darknir, b7);
+  
+  var b1_250_signedcorr = zensign.multiply(image.select('ts1_1'));
+  var b1_250_abscorr = absdev.multiply(image.select('t1_1'));
+  var newb1_250 = b1_250.subtract(b1_250_signedcorr).subtract(b1_250_abscorr).clamp(0,10000).rename('newb1_250');
+  newb1_250 = newb1_250.where(darknir, b1_250);
+  
+  var b2_250_signedcorr = zensign.multiply(image.select('ts2_1'));
+  var b2_250_abscorr = absdev.multiply(image.select('t2_1'));
+  var newb2_250 = b2_250.subtract(b2_250_signedcorr).subtract(b2_250_abscorr).clamp(0,10000).rename('newb2_250');
+  newb2_250 = newb2_250.where(darknir, b2_250);
+  
+return image.addBands([newb1,newb2,newb3,newb4,newb5,newb6,newb7,newb1_250,newb2_250]);
+};
+
+// APPLY ABOVE
+var MOD_corrected2 = MOD_cj2.map(appcorr);
+var MYD_corrected2 = MYD_cj2.map(appcorr);
+
+// JOIN CORRECTED PRODUCTS FOR FINAL A-T CORRECTION
+var corr_join2 = joinCollections(MOD_corrected2,MYD_corrected2); //
+
+// JOIN HILLSHADE COLLECTION AS WELL (BV version)
+function joinCollectionsBV(coll1,coll2){
+      var MergeBands = function(element) {
+        return ee.Image.cat(element.get('primary'), element.get('secondary'));
+      };
+      var join = ee.Join.inner();
+      var filter = ee.Filter.equals('bimval', null, 'bimval');
+      var joined = ee.ImageCollection(join.apply(coll1, coll2, filter));
+      joined = ee.ImageCollection(joined.map(MergeBands));
+      return joined;
+    }  
+
+var corr_join2 = joinCollectionsBV(corr_join2,hillcoll);
+
+
+// FUNCTION TO ***convert*** THOSE PIXELS WITH LARGE A-T difference into cloud variable=1 (for DSWE)
+// {PLUS MANY OTHER MODIFICATIONS TO HELP ACCOUNT FOR PROBLEMATIC MODIS DATA}
+
+var cld_bigdiff = function(image){
+  var aqua_oldnir = image.select('sur_refl_b02_2');
+  var terra_oldnir = image.select('sur_refl_b02');
+  var terra_oldswir1 = image.select('sur_refl_b06').unmask(ee.Image(0));
+  var aqua_newnir = image.select('newb2_1');
+  var terra_newnir = image.select('newb2');
+  var terra_newswir1 = image.select('newb6');
+  var terra_newred = image.select('newb1');
+  var old_nirdiff = aqua_oldnir.subtract(terra_oldnir);
+  var new_nirdiff = aqua_newnir.subtract(terra_newnir);
+  //var smalldiff2 = old_nirdiff.abs().lt(1200).and(new_nirdiff.abs().lt(700));
+  // Only grab the most obvious missed Terra clouds (or Aqua shadow)
+  var nodata = terra_newnir.eq(0).and(terra_newred.eq(0)).and(terra_newswir1.eq(0)).rename('nodata');
+  var bigdiff = (old_nirdiff.lte(-3000).or(new_nirdiff.lte(-1500))).and(terra_newnir.gte(4000)).rename('bigdiff');
+  var bigdiff1 = (old_nirdiff.gte(2000).or(new_nirdiff.gte(750))).and(terra_newnir.lte(2000)).rename('bigdiff1');
+  var bigdiff2 = bigdiff.or(bigdiff1).rename('bigdiff2')
+  // NDVI
+  var vi = image.select('newb2').subtract(image.select('newb1')).divide(image.select('newb2').add(image.select('newb1'))).rename('vi');
+  // soil index
+  var si = image.select('newb1').subtract(image.select('newb3')).divide(image.select('newb1').add(image.select('newb3'))).rename('si');
+  // OTHER MODIFICATIONS
+  var lowcombo = image.select('sur_refl_b04').lt(200).and(terra_oldswir1.gte(terra_oldnir)).and(terra_oldnir.lt(100)).and(terra_oldswir1.lt(200)).rename('lowcombo');
+  var bright = terra_newnir.gte(3000).or(terra_newnir.gte(1500).and(vi.lt(0.8)).and(si.lt(0.075))).rename('bright');
+  bright = bright.and(slope.gt(0.5)); // AVOID REMOVING FLAT AREAS IN BRIGHT SNOW REMOVAL: PLAYA WATER
+  var darkboth = terra_newnir.lt(1000).and(terra_newswir1.lt(750)).and(terra_newred.lt(1500)).and(aqua_newnir.lt(1250)).and(new_nirdiff.lt(750)).and(vi.lt(0.2)).rename('darkboth')
+  var shadow = getQABits(image.select('state_1km'),2,2,'shadow')
+  darkboth = darkboth.and(shadow.eq(0)); // i.e., don't over-ride cloud mask if mask identified as shadow
+  var clouds = image.select('clouds');
+  var clds = clouds.and(darkboth.neq(1)).rename('clouds');
+  return image.addBands(nodata).addBands(lowcombo).addBands(bigdiff2).addBands(bright).addBands({srcImg:clds, overwrite:true});
+};
+
+var corr_join_cld = corr_join2.map(cld_bigdiff);
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+// **** DOWNSCALE 4 OTHER BANDS TO 250 METERS  ****
+var downsc = function(image){  
+  var green = image.select('newb4');
+  var nir = image.select('newb2');
+  var swir1 = image.select('newb6');
+  
+  var red = image.select('newb1');
+  var blue = image.select('newb3');
+  var swir2 = image.select('newb7');
+  var red250 = image.select('newb1_250');
+  var nir250 = image.select('newb2_250');
+  
+  // downscaling ratios (need to account for various problematic zero values)
+  var testrawred0 = image.select('sur_refl_b01').eq(0).or(image.select('sur_refl_b01_1').eq(0));
+  var testrawnir0 = image.select('sur_refl_b02').eq(0).or(image.select('sur_refl_b02_1').eq(0));
+  var testred0 = red.eq(0).or(red250.eq(0));
+  var testnir0 = nir.eq(0).or(nir250.eq(0));
+  var testred100 = red.add(red250).lt(100);
+  var testnir100 = nir.add(nir250).lt(100);
+  var ratred = red.divide(red250);
+  var ratnir = nir.divide(nir250);
+  var testrr = ratred.gte(10).or(ratred.lt(0.1)).or(ratnir.gte(10)).or(ratnir.lt(0.1));
+  var testany = testrawred0.or(testrawnir0).or(testred0).or(testnir0).or(testred100).or(testnir100).or(testrr);
+  ratred = ratred.where(testany,1);
+  ratnir = ratnir.where(testany,1);
+  ratred = ratred.where(0,1); // This should handle if 0 in either of the inputs to the ratio
+  ratnir = ratnir.where(0,1); // Should be redundant at this point, but might as well keep in case
+
+  var newb4_d = green.divide(ratred).rename('newb4_d');
+  var newb3_d = blue.divide(ratred).rename('newb3_d');
+  var newb6_d = swir1.divide(ratnir).rename('newb6_d');
+  var newb7_d = swir2.divide(ratnir).rename('newb7_d');
+  
+  image = image.addBands([newb3_d,newb4_d,newb6_d,newb7_d]);
+  return image;
+}
+
+corr_join_cld = corr_join_cld.map(downsc); // 
+
+
+// function to get names right for DSWE function
+var sub_name = function(image){
+  var subset = image.select(['nodata','hillshade','newb3_d','newb4_d','newb1_250','newb2_250','newb6_d','newb7_d','state_1km',
+'lowcombo','bigdiff2','bright','clouds'],['nodata','hillshade','blue','green','red','nir','swir1','swir2','pixel_qa','lowcombo','bigdiff2','bright','clouds']);
+  return subset;
+};
+
+var cjc = corr_join_cld.map(sub_name);
+
+var cjcf = cjc.first();
+print(cjcf, 'cjcf')
+// ----------------------------------------------------------------------
+// Calculate DSWE indices
+// ----------------------------------------------------------------------
+function addIndices(img){
+  
+// NDVI 
+    img = img.addBands(img.normalizedDifference(['nir', 'red']).select([0], ['ndvi']));
+
+// MNDWI (Modified Normalized Difference Wetness Index) = (Green - SWIR1) / (Green + SWIR1)
+    img = img.addBands(img.normalizedDifference(['green', 'swir1']).select([0], ['mndwi']));
+
+// MBSRV (Multi-band Spectral Relationship Visible) = Green + Red
+    img = img.addBands(img.select('green').add(img.select('red')).select([0], ['mbsrv'])).toFloat();
+
+// MBSRN (Multi-band Spectral Relationship Near-Infrared) = NIR + SWIR1
+    img = img.addBands(img.select('nir').add(img.select('swir1')).select([0], ['mbsrn']).toFloat());
+
+// AWEsh (Automated Water Extent Shadow) = Blue + (2.5 * Green) + (-1.5 * mbsrn) + (-0.25 * SWIR2)
+    img = img.addBands(img.expression('blue + (2.5 * green) + (-1.5 * mbsrn) + (-0.25 * swir2)', {
+         'blue': img.select('blue'),
+         'green': img.select('green'),
+         'mbsrn': img.select('mbsrn'),
+         'swir2': img.select('swir2')
+    }).select([0], ['awesh'])).toFloat();     
+    return img;
+}
+
+// Add indices
+var img_indices2 = cjc.map(addIndices);
+
+// ----------------------------------------------------------------------
+// DSWE parameter testing
+// ----------------------------------------------------------------------
+
+// Bitmask of 11111 = 16 + 8 + 4 + 2 + 1 = 31 = 1F in hex 
+
+// 1. ========== Function: test MNDWI ===========
+// If (MNDWI > 0.124) set the ones digit (i.e., 00001)
+function test_mndwi(img) {
+  var mask = img.select('mndwi').gt(0.124);
+  return img.addBands(mask
+            .bitwiseAnd(0x1F)  
+            .rename('mndwi_bit'));
+}
+
+// 2. ======== Function: compare MBSRV and MBSRN ========
+// If (MBSRV > MBSRN) set the tens digit (i.e., 00010)
+function test_mbsrv_mbsrn(img) {
+  var mask = img.select('mbsrv').gt(img.select('mbsrn'));
+  return img.addBands(mask
+            .bitwiseAnd(0x1F) 
+            .leftShift(1)  // shift left 1 space
+            .rename('mbsrn_bit'));   
+}
+
+// 3. ======== Function: test AWEsh ========
+// If (AWEsh > 0.0) set the hundreds digit (i.e., 00100)
+function test_awesh(img) {
+  var mask = img.select('awesh').gt(0.0);
+  return img.addBands(mask
+              .bitwiseAnd(0x1F)
+              .leftShift(2)  // shift left 2 spaces
+              .rename('awesh_bit'));  
+}
+
+// 4. ======= Function: test PSW1 ========
+// If (MNDWI > -0.44 && SWIR1 < 900 && NIR < 1500 & NDVI < 0.7) set the thousands digit (i.e., 01000)
+function test_mndwi_swir1_nir(img) {
+  var mask = img.select('mndwi').gt(-0.44)
+              .and(img.select('swir1').lt(900))
+              .and(img.select('nir').lt(1500))
+              .and(img.select('ndvi').lt(0.7));
+  return img.addBands(mask            
+            .bitwiseAnd(0x1F)
+            .leftShift(3)  // shift left 3 spaces
+            .rename('swir1_bit')); 
+}
+
+// 5. ======= Function: test PSW2 =========
+// If (MNDWI > -0.5 && SWIR1 < 3000 && SWIR2 < 1000 && NIR < 2500 && Blue < 1000) set the ten-thousands digit (i.e., 10000)
+function test_mndwi_swir2_nir(img){
+  var mask = img.select('mndwi').gt(-0.5)
+              .and(img.select('swir1').lt(3000))
+              .and(img.select('swir2').lt(1000))
+              .and(img.select('nir').lt(2500))
+              .and(img.select('blue').lt(1000));
+  return img.addBands(mask
+              .bitwiseAnd(0x1F)
+              .leftShift(4)  // shift left 4 spaces
+              .rename('swir2_bit'));  
+}
+
+// EW: PRETTY REDUNDANT WITH BELOW, RIGHT?????????
+// // Add all bitwise bands to image collection
+// img_indices_bit = ee.ImageCollection(img_indices)
+//               .map(test_mndwi)
+//               .map(test_mbsrv_mbsrn)
+//               .map(test_awesh)
+//               .map(test_mndwi_swir1_nir)
+//               .map(test_mndwi_swir2_nir);
+
+// Function: consolidate individual bit bands
+function sum_bit_bands(img){
+  var bands = img.select(['mndwi_bit', 'mbsrn_bit', 'awesh_bit', 'swir1_bit', 'swir2_bit']);
+  //EW: MY CHANGE TO DEAL WITH A MASK PROBLEM
+  var b1 = img.select('mndwi_bit');
+  var b2 = img.select('mbsrn_bit');
+  var b3 = img.select('awesh_bit');
+  var b4 = img.select('swir1_bit');
+  var b5 = img.select('swir2_bit');
+  //bands = bands.unmask(ee.Image(0));
+  //var summed_bands = bands.reduce(ee.Reducer.sum());
+  var summed_bands = b1.add(b2).add(b3).add(b4).add(b5);
+  //var summed_bands = bands.reduce(ee.Reducer.bitwiseOr());
+  return img.addBands(summed_bands.rename('summed_bit_band'));
+}
+
+// Add individual bit bands to image collection and summarize
+var img_indices_bit2 = ee.ImageCollection(img_indices2)
+              .map(test_mndwi)
+              .map(test_mbsrv_mbsrn)
+              .map(test_awesh)
+              .map(test_mndwi_swir1_nir)
+              .map(test_mndwi_swir2_nir)
+              .map(sum_bit_bands);
+
+// ----------------------------------------------------------------------
+// Produce DSWE layers
+// ----------------------------------------------------------------------
+
+// ic2 (clouds kept)
+var dswe_ic2 = img_indices_bit2.map(function(img){
+  var tmp = img.select('summed_bit_band').remap([0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                                            10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                            20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                                            30, 31],
+                                            
+                                            [0, 0, 0, 4, 0, 4, 4, 2, 0, 4,
+                                             4, 2, 4, 2, 2, 1, 4, 4, 4, 2,
+                                             4, 2, 2, 1, 3, 2, 2, 1, 2, 1, 
+                                             1, 1]).rename('dswe');
+  var reclass = img.select('summed_bit_band').remap([0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+                                            10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+                                            20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+                                            30, 31],
+                                            
+                                            [0, 0, 0, 4, 0, 4, 4, 2, 0, 4,
+                                             4, 2, 4, 2, 2, 1, 4, 4, 4, 2,
+                                             4, 2, 2, 1, 3, 2, 2, 1, 2, 1, 
+                                             1, 1]).rename('dswe');
+
+// Identify cloud-contaminated pixels as 9                                           
+    // reclass = reclass.where(img.select('clouds').eq(1), 9);  
+    // reclass = reclass.where(img.select('dswe').eq(4) && slope.gte(5.71).or  // 10% slope = 5.71°
+    //           (img.select('dswe').eq(3) && slope.gte(11.31)).or             // 20% slope = 11.31°
+    //           (img.select('dswe').eq(2) && slope.gte(16.7)).or              // 30% slope = 16.7°
+    //           (img.select('dswe').eq(1) && slope.gte(16.7)), 0);            // 30% slope = 16.7°
+    // //reclass = reclass.where(img.select('hillshade').lte(110), 9);  
+    // reclass = reclass.where(img.select('hillshade').lte(110), 9); 
+    // //reclass = reclass.where(img.select('clouds').eq(1), 9); 
+    // Identify cloud-contaminated pixels as 9 
+    reclass = reclass.where(img.select('lowcombo').eq(1), 1);
+    reclass = reclass.where(img.select('bright').eq(1).and(tmp.select('dswe').eq(2)), 9);
+    reclass = reclass.where(img.select('bigdiff2').eq(1), 9);
+    reclass = reclass.where(img.select('clouds').eq(1), 9);
+    //reclass = reclass.where(img.select('darkboth').eq(1).and(img.select('clouds').eq(1)).and(tmp.select('dswe').eq(1)), 5);
+    reclass = reclass.where(img.select('hillshade').lte(110).and(tmp.select('dswe').gt(0)), 8);
+    reclass = reclass.where(img.select('nodata').eq(1), 9);  
+    reclass = reclass.where(tmp.select('dswe').eq(4) && slope.gte(5.71).or  // 10% slope = 5.71°
+              (tmp.select('dswe').eq(3) && slope.gte(11.31)).or                          // 20% slope = 11.31°
+              (slope.gte(16.7)), 0);                                                                      // 30% slope = 16.7°  
+    
+  return img.addBands(reclass);//.select('dswe');
+});
+
+
+var dswe_viz = {min:0, max: 9, palette: ['000000', '002ba1', '00ffff', '00ff00', '777777', '000000', '000000',
+                                  '000000', 'ff7700', 'ffff00']};
+                  
+Map.addLayer(dswe_ic2.select('dswe').first(), dswe_viz, 'dswe first', true);
+
+
+// Function to make dswe negative etc. for max-dswe compositing
+// var dswe_ic2neg = dswe_ic2.map(function(img){
+//   var dswe_neg = img.select('dswe').remap([0, 1, 2, 3, 4, 8, 9],
+//                                             [-5,-1,-2,-3,-4,-8,-9]).rename('dswe_neg');
+//   return img.addBands(dswe_neg);
+// });
+
+
+// var dswe_negcoll = dswe_ic2neg.select('dswe_neg');
+
+//var years2bands = dswe_negcoll.toBands();
+var dswe_ic3 = dswe_ic2.select('dswe');
+var years2bands = dswe_ic3.toBands();
+var oldBands = years2bands.bandNames();
+
+var newBands = oldBands.map(function(b) {
+  var strings = ee.String(b).split('_201');
+  return ee.String(ee.String('b_201').cat(strings.get(1)));
+});
+
+years2bands = years2bands.rename(newBands);
+
+//print(years2bands, 'years2bands')
+
+  Export.image.toAsset({
+  image: years2bands,
+  description: 'MODIS_DSWE_2011_2019_US_daily',
+  crs: crsSIN250,
+  scale: scaleSIN250,
+  region: region.geometry().bounds(),
+  maxPixels: 100000000000
+});
